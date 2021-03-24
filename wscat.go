@@ -54,6 +54,10 @@ func init() {
 		go_log.Fatal(err)
 	}
 
+	if ip := net.ParseIP(host); len(ip) == 128/8 { // host if ipv6
+		host = "[" + host + "]"
+	}
+
 	switch MsgType {
 	case "text":
 	case "bin":
