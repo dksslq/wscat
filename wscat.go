@@ -17,9 +17,10 @@ import "github.com/gorilla/websocket"
 
 var Verbose bool
 var Listen bool
+var Lowkey bool
 var Proto string
 var Bind string
-var Addr string
+var Peer string
 var Path string
 var MsgType string
 
@@ -41,9 +42,10 @@ func fatal(v ...interface{}) {
 func init() {
 	flag.BoolVar(&Verbose, "v", false, "verbose output")
 	flag.BoolVar(&Listen, "listen", false, "run as websocket server")
+	flag.BoolVar(&Lowkey, "lowkey", false, "similar to listen, but server shuts down when it accepted a client")
 	flag.StringVar(&Proto, "proto", "ws", "ws(plain text) or wss(ws over tls)")
 	flag.StringVar(&Bind, "bind", "", "local addr")
-	flag.StringVar(&Addr, "addr", "", "addr to connect")
+	flag.StringVar(&Peer, "peer", "", "peer addr to connect to or limit client addr while as a server")
 	flag.StringVar(&Path, "path", "/", "websocket url path")
 	flag.StringVar(&MsgType, "type", "text", "websocket message type")
 	flag.Parse()
@@ -52,22 +54,26 @@ func init() {
 	case "ws":
 	case "wss":
 	default:
-		fatal("Proto", Proto, "is not supported.")
+		fatal("Proto", Proto, "is not supported")
 	}
 
 	if Path[0] != '/' {
 		fatal("Path must start with `/'")
 	}
 
-	if !Listen && Addr == "" {
-		fatal("Must specify addr to connect to.")
+	if !Listen && !Lowkey && Peer == "" {
+		fatal("Must specify addr to connect to")
+	}
+
+	if Listen && Lowkey {
+		fatal("Accept one of \"-listen/-lowkey\" only")
 	}
 
 	switch MsgType {
 	case "text":
 	case "bin":
 	default:
-		fatal("MsgType", MsgType, "is not supported.")
+		fatal("MsgType", MsgType, "is not supported")
 	}
 }
 
@@ -85,14 +91,14 @@ func main() {
 		}
 	}
 
-	if Addr != "" {
-		raddr, err = net.ResolveTCPAddr("tcp", Addr)
+	if Peer != "" {
+		raddr, err = net.ResolveTCPAddr("tcp", Peer)
 		if err != nil {
 			fatal(err)
 		}
 	}
 
-	if Listen {
+	if Listen || Lowkey {
 		var lr net.Listener
 		lr, err = net.ListenTCP("tcp", laddr)
 		if err != nil {
@@ -111,6 +117,7 @@ func main() {
 		pimp := make(chan *websocket.Conn, 0)
 		server = &http.Server{
 			Handler: &requestHandler{
+				Addr:     raddr,
 				Path:     Path,
 				Upgrader: upgrader,
 				Pimp:     pimp,
@@ -128,7 +135,7 @@ func main() {
 	} else {
 		var URL string
 
-		host, port, err := net.SplitHostPort(Addr)
+		host, port, err := net.SplitHostPort(Peer)
 		if err != nil {
 			fatal(err)
 		}
@@ -161,6 +168,10 @@ func main() {
 	}
 
 	log("Connected")
+
+	if Lowkey {
+		log("Shutting down http server early as it is running low-key", server.Shutdown(context.Background()))
+	}
 
 	// i
 	donei := make(chan error, 0)
@@ -226,6 +237,6 @@ func main() {
 	log("statistics:", statistics_i, "bytes recv,", statistics_o, "bytes sent")
 
 	if Listen {
-		log("Shuting down http server", server.Shutdown(context.Background()))
+		log("Shutting down http server", server.Shutdown(context.Background()))
 	}
 }
