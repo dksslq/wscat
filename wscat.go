@@ -1,6 +1,7 @@
 package main
 
 import "context"
+import "crypto/tls"
 import "flag"
 import "fmt"
 import "net"
@@ -18,11 +19,16 @@ import "github.com/gorilla/websocket"
 var Verbose bool
 var Listen bool
 var Lowkey bool
+var Cert string
+var Key string
+var Insec bool
 var Proto string
 var Bind string
 var Peer string
 var Path string
 var MsgType string
+
+var Host, Port string
 
 func log(v ...interface{}) {
 	if !Verbose {
@@ -36,13 +42,26 @@ func warning(v ...interface{}) {
 }
 
 func fatal(v ...interface{}) {
-	damn.Fatal(v...)
+	var fuck []interface{}
+	var e = len(v) - 1
+
+	for i, f := range v {
+		fuck = append(fuck, f)
+		if i < e {
+			fuck = append(fuck, " ")
+		}
+	}
+
+	damn.Fatal(fuck...)
 }
 
 func init() {
 	flag.BoolVar(&Verbose, "v", false, "verbose output")
 	flag.BoolVar(&Listen, "listen", false, "run as websocket server")
 	flag.BoolVar(&Lowkey, "lowkey", false, "similar to listen, but server shuts down when it accepted a client")
+	flag.StringVar(&Cert, "cert", "", "wss server tls cert file")
+	flag.StringVar(&Key, "key", "", "wss server tls key file")
+	flag.BoolVar(&Insec, "insec", false, "client skip verifies the server's cert")
 	flag.StringVar(&Proto, "proto", "ws", "ws(plain text) or wss(ws over tls)")
 	flag.StringVar(&Bind, "bind", "", "local addr")
 	flag.StringVar(&Peer, "peer", "", "peer addr to connect to or limit client addr while as a server")
@@ -67,6 +86,14 @@ func init() {
 
 	if Listen && Lowkey {
 		fatal("Accept one of \"-listen/-lowkey\" only")
+	}
+
+	if (Listen || Lowkey) && Proto == "wss" && (Cert == "" || Key == "") {
+		fatal("Must specify tls cert and key while run as a wss server")
+	}
+
+	if (Listen || Lowkey) && Insec {
+		fatal("Option \"-insec\" incompatible with server mode")
 	}
 
 	switch MsgType {
@@ -100,9 +127,23 @@ func main() {
 
 	if Listen || Lowkey {
 		var lr net.Listener
-		lr, err = net.ListenTCP("tcp", laddr)
-		if err != nil {
-			fatal(err)
+
+		if Proto == "ws" {
+			lr, err = net.ListenTCP("tcp", laddr)
+			if err != nil {
+				fatal(err)
+			}
+		} else if Proto == "wss" {
+			var cert tls.Certificate
+			cert, err = tls.LoadX509KeyPair(Cert, Key)
+			if err != nil {
+				fatal(err)
+			}
+
+			lr, err = tls.Listen("tcp", laddr.String(), &tls.Config{Certificates: []tls.Certificate{cert}})
+			if err != nil {
+				fatal(err)
+			}
 		}
 
 		var upgrader = &websocket.Upgrader{
@@ -135,18 +176,18 @@ func main() {
 	} else {
 		var URL string
 
-		host, port, err := net.SplitHostPort(Peer)
+		Host, Port, err := net.SplitHostPort(Peer)
 		if err != nil {
 			fatal(err)
 		}
 
-		if ip := net.ParseIP(host); strings.ContainsRune(ip.String(), ':') { // host if ipv6
-			host = "[" + host + "]"
+		if ip := net.ParseIP(Host); strings.ContainsRune(ip.String(), ':') { // host if ipv6
+			Host = "[" + Host + "]"
 		}
 
-		URL = Proto + "://" + host
-		if (Proto == "ws" && port != "80") || (Proto == "wss" && port != "443") {
-			URL += ":" + port
+		URL = Proto + "://" + Host
+		if (Proto == "ws" && Port != "80") || (Proto == "wss" && Port != "443") {
+			URL += ":" + Port
 		}
 		URL += Path
 
@@ -159,6 +200,17 @@ func main() {
 			ReadBufferSize:   4 * 1024,
 			WriteBufferSize:  4 * 1024,
 			HandshakeTimeout: time.Second * 8,
+		}
+
+		if Proto == "wss" {
+			dialer.TLSClientConfig = &tls.Config{}
+			if Insec {
+				dialer.TLSClientConfig.InsecureSkipVerify = true
+			} else {
+				dialer.TLSClientConfig.ServerName = Host
+				dialer.TLSClientConfig.InsecureSkipVerify = false
+			}
+
 		}
 
 		conn, _, err = dialer.Dial(URL, map[string][]string{})
