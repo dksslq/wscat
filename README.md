@@ -1,3 +1,0 @@
-支持websocket的netcat工具
-
-为什么readme这么简陋？我在等某个有缘人的PR。
